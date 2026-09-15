@@ -359,6 +359,7 @@ class LoadingSpinner(QWidget):
 class SmoothScrollArea(QScrollArea):
     """
     Optimized kinetic touch & mouse drag scroll area designed for handheld ergonomics (Legion Go).
+    Handles BOTH native Windows touchscreen input (QTouchEvent) AND mouse drag as fallback.
     Allows vertical flicking, swiping, and inertia momentum deceleration anywhere on the viewport.
     """
     def __init__(self, parent=None):
@@ -368,7 +369,7 @@ class SmoothScrollArea(QScrollArea):
         self._scroll_animation.setDuration(400)
         self._scroll_animation.setEasingCurve(QEasingCurve.OutCubic)
 
-        # Kinetic Touch & Drag Tracking
+        # Kinetic Touch & Drag Tracking (shared between touch and mouse paths)
         self._is_dragging = False
         self._drag_start_y = 0
         self._last_drag_y = 0
@@ -376,54 +377,107 @@ class SmoothScrollArea(QScrollArea):
         self._velocity = 0.0
         self._drag_threshold = 8
         self._drag_occurred = False
+        self._active_touch_id = None  # Track which touch point we're following
 
-        if self.viewport():
-            self.viewport().installEventFilter(self)
+        vp = self.viewport()
+        if vp:
+            # Enable native touch event delivery on the viewport
+            vp.setAttribute(Qt.WA_AcceptTouchEvents, True)
+            vp.installEventFilter(self)
+
+    def _begin_drag(self, y_pos):
+        """Start a drag/touch tracking session."""
+        self._is_dragging = True
+        self._drag_start_y = y_pos
+        self._last_drag_y = y_pos
+        self._last_drag_time = time.time()
+        self._velocity = 0.0
+        self._drag_occurred = False
+        self._scroll_animation.stop()
+
+    def _update_drag(self, y_pos):
+        """Process a drag/touch move. Returns True if a scroll drag occurred (to suppress click)."""
+        if not self._is_dragging:
+            return False
+
+        delta_y = y_pos - self._last_drag_y
+        total_delta = abs(y_pos - self._drag_start_y)
+
+        if total_delta > self._drag_threshold:
+            self._drag_occurred = True
+
+        now = time.time()
+        dt = max(0.001, now - self._last_drag_time)
+        self._velocity = (-delta_y) / dt
+        self._last_drag_y = y_pos
+        self._last_drag_time = now
+
+        bar = self.verticalScrollBar()
+        if bar:
+            bar.setValue(bar.value() - int(delta_y))
+        return self._drag_occurred
+
+    def _end_drag(self):
+        """Finish a drag/touch session and apply momentum if needed. Returns True if drag occurred."""
+        was_drag = self._drag_occurred
+        self._is_dragging = False
+        self._active_touch_id = None
+
+        bar = self.verticalScrollBar()
+        if bar and abs(self._velocity) > 60:
+            momentum_offset = int(self._velocity * 0.32)
+            target = max(bar.minimum(), min(bar.maximum(), bar.value() + momentum_offset))
+            self._scroll_animation.stop()
+            self._scroll_animation.setDuration(480)
+            self._scroll_animation.setStartValue(bar.value())
+            self._scroll_animation.setEndValue(target)
+            self._scroll_animation.start()
+
+        return was_drag
 
     def eventFilter(self, obj, event):
-        if obj == self.viewport():
-            event_type = event.type()
-            if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-                self._is_dragging = True
-                self._drag_start_y = event.pos().y()
-                self._last_drag_y = event.pos().y()
-                self._last_drag_time = time.time()
-                self._velocity = 0.0
-                self._drag_occurred = False
-                self._scroll_animation.stop()
+        if obj != self.viewport():
+            return super().eventFilter(obj, event)
 
-            elif event_type == QEvent.MouseMove and self._is_dragging:
-                current_y = event.pos().y()
-                delta_y = current_y - self._last_drag_y
-                total_delta = abs(current_y - self._drag_start_y)
+        event_type = event.type()
 
-                if total_delta > self._drag_threshold:
-                    self._drag_occurred = True
+        # ── Native Touch Events (Windows touchscreen / Legion Go) ──
+        if event_type == QEvent.TouchBegin:
+            touch_points = event.touchPoints()
+            if touch_points:
+                tp = touch_points[0]
+                self._active_touch_id = tp.id()
+                self._begin_drag(tp.pos().y())
+            event.accept()
+            return True
 
-                now = time.time()
-                dt = max(0.001, now - self._last_drag_time)
-                self._velocity = (-delta_y) / dt
-                self._last_drag_y = current_y
-                self._last_drag_time = now
+        elif event_type == QEvent.TouchUpdate:
+            touch_points = event.touchPoints()
+            for tp in touch_points:
+                if self._active_touch_id is not None and tp.id() == self._active_touch_id:
+                    self._update_drag(tp.pos().y())
+                    break
+            event.accept()
+            return True
 
-                bar = self.verticalScrollBar()
-                if bar:
-                    bar.setValue(bar.value() - delta_y)
-                return self._drag_occurred
+        elif event_type == QEvent.TouchEnd or event_type == QEvent.TouchCancel:
+            self._end_drag()
+            event.accept()
+            return True
 
-            elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton and self._is_dragging:
-                self._is_dragging = False
-                bar = self.verticalScrollBar()
-                if bar and abs(self._velocity) > 60:
-                    momentum_offset = int(self._velocity * 0.32)
-                    target = max(bar.minimum(), min(bar.maximum(), bar.value() + momentum_offset))
-                    self._scroll_animation.stop()
-                    self._scroll_animation.setDuration(480)
-                    self._scroll_animation.setStartValue(bar.value())
-                    self._scroll_animation.setEndValue(target)
-                    self._scroll_animation.start()
+        # ── Mouse Drag Fallback (trackpad, desktop mouse, stylus) ──
+        if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            # Only start mouse drag if we're not already in a touch drag
+            if self._active_touch_id is None:
+                self._begin_drag(event.pos().y())
 
-                if self._drag_occurred:
+        elif event_type == QEvent.MouseMove and self._is_dragging and self._active_touch_id is None:
+            if self._update_drag(event.pos().y()):
+                return True
+
+        elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            if self._is_dragging and self._active_touch_id is None:
+                if self._end_drag():
                     return True
 
         return super().eventFilter(obj, event)

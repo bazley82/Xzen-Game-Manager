@@ -2910,6 +2910,10 @@ if __name__ == "__main__":
         if relaunch_as_admin():
             sys.exit(0)
 
+    # Enable touch-to-mouse synthesis for widgets that don't handle touch natively.
+    # This must be set BEFORE QApplication is constructed.
+    QApplication.setAttribute(Qt.AA_SynthesizeMouseForUnhandledTouchEvents, True)
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     if APP_ICON_FILE.exists():
