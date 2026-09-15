@@ -1,0 +1,75 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Single Windows Executable with PyInstaller
+        run: |
+          pyinstaller "Xzen Game Manager.spec" --clean
+
+      - name: Verify Executable Exists
+        shell: bash
+        run: |
+          if [ -f "dist/Xzen Game Manager.exe" ]; then
+            echo "Executable built successfully!"
+            ls -lh "dist/Xzen Game Manager.exe"
+          else
+            echo "Executable not found in dist/"
+            exit 1
+          fi
+
+      - name: Upload Single Windows Executable Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xzen-Game-Manager-Windows-Exe
+          path: dist/Xzen Game Manager.exe
+          if-no-files-found: error
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.0-legion-go
+          name: "Xzen Game Compressor - Legion Go & Handheld Edition (v1.0.0)"
+          body: |
+            ## Xzen Game Compressor - Handheld & Legion Go Edition
+
+            ### What's New:
+            - **Touch-Swipe Kinetic Scrolling**: Multi-touch & drag vertical list navigation with inertia momentum.
+            - **Batch Queue Operations**: Multi-selection checkboxes and master "Select All" toggle for sequential background compression.
+            - **Traffic Light Compressibility Indicators**: Live folder parsing indicators (🟢 Green High Yield / 🟡 Moderate / 🔴 Red Low Yield).
+            - **Pre-Calculated Savings Preview**: Real-time storage savings preview estimation on every game entry.
+            - **Pre-Compressed Media Exclusions**: Instant bypass of `.mp4`, `.mp3`, and compressed archive formats to save CPU cycles.
+            - **Auto-Compress Background Monitor**: Background service to auto-schedule LZX compression when new game downloads complete and device is idle.
+
+            Download `Xzen Game Manager.exe` below to run immediately on Windows!
+          files: dist/Xzen Game Manager.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
