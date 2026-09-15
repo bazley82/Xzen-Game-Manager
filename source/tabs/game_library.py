@@ -1,10 +1,23 @@
 import os
-from PyQt5.QtCore import QAbstractAnimation, QEasingCurve, QPointF, QPropertyAnimation, QRect, QRectF, Qt, QTimer, pyqtSignal
+import time
+from PyQt5.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    QEvent,
+    QPointF,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    Qt,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QWidget,
     QLabel,
     QPushButton,
+    QCheckBox,
     QScrollArea,
     QGridLayout,
     QVBoxLayout,
@@ -18,12 +31,13 @@ from PyQt5.QtWidgets import (
 
 from source.xzen_engine.posters import sanitize_png_file
 from source.xzen_engine.app_state import background_saved_bytes, original_game_size
+from source.xzen_engine.compressibility import calculate_savings_preview
 from source.xzen_engine.theme import color as theme_color, themed_qss
 
 
 MIN_CARD_W = 205
 MAX_CARD_W = 235
-CARD_H_EXTRA = 158
+CARD_H_EXTRA = 172
 POSTER_W_PADDING = 30
 POSTER_ASPECT = 260 / 175
 GRID_SPACING = 12
@@ -92,6 +106,29 @@ PURPLE_SCROLLBAR_STYLE = themed_qss(f"""
     }}
 """)
 
+CHECKBOX_STYLE = themed_qss("""
+    QCheckBox {
+        color: #ffffff;
+        font-size: 11px;
+        background: transparent;
+    }
+    QCheckBox::indicator {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        border: 1px solid #2B2640;
+        background: #12101C;
+    }
+    QCheckBox::indicator:hover {
+        border-color: #B38AFF;
+        background: #181525;
+    }
+    QCheckBox::indicator:checked {
+        background: #9D4EDD;
+        border-color: #C071FF;
+    }
+""")
+
 
 class PosterLabel(QLabel):
     left_clicked = pyqtSignal()
@@ -149,204 +186,168 @@ class PosterCropCanvas(QWidget):
         y = frame.center().y() - self.center.y() * scale
         return QRectF(x, y, image_w, image_h)
 
-    def clamp_center(self):
-        frame = self.crop_frame()
-        scale = self.image_scale()
-        crop_w = frame.width() / scale
-        crop_h = frame.height() / scale
-        min_x = crop_w / 2
-        max_x = self.pixmap.width() - crop_w / 2
-        min_y = crop_h / 2
-        max_y = self.pixmap.height() - crop_h / 2
-        if min_x > max_x:
-            self.center.setX(self.pixmap.width() / 2)
-        else:
-            self.center.setX(max(min_x, min(max_x, self.center.x())))
-        if min_y > max_y:
-            self.center.setY(self.pixmap.height() / 2)
-        else:
-            self.center.setY(max(min_y, min(max_y, self.center.y())))
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        painter.fillRect(self.rect(), QColor("#08070D"))
 
-    def set_zoom_percent(self, value):
-        self.zoom = max(1.0, min(3.0, value / 100.0))
-        self.clamp_center()
-        self.update()
-
-    def crop_pixmap(self):
-        self.clamp_center()
-        frame = self.crop_frame()
         rect = self.image_rect()
-        scale = self.image_scale()
-        source = QRect(
-            int(round((frame.left() - rect.left()) / scale)),
-            int(round((frame.top() - rect.top()) / scale)),
-            int(round(frame.width() / scale)),
-            int(round(frame.height() / scale)),
-        ).intersected(self.pixmap.rect())
-        if source.isEmpty():
-            return QPixmap()
-        return self.pixmap.copy(source).scaled(600, 900, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        painter.drawPixmap(
+            QRect(int(rect.x()), int(rect.y()), int(rect.width()), int(rect.height())),
+            self.pixmap,
+        )
+
+        frame = self.crop_frame()
+        overlay = QColor(0, 0, 0, 180)
+        painter.fillRect(0, 0, self.width(), int(frame.top()), overlay)
+        painter.fillRect(0, int(frame.bottom()), self.width(), int(self.height() - frame.bottom()), overlay)
+        painter.fillRect(0, int(frame.top()), int(frame.left()), int(frame.height()), overlay)
+        painter.fillRect(int(frame.right()), int(frame.top()), int(self.width() - frame.right()), int(frame.height()), overlay)
+
+        pen = QPen(QColor(theme_color("accent_soft")), 2)
+        painter.setPen(pen)
+        painter.drawRect(frame.toRect())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.drag_start = event.pos()
             self.drag_center = QPointF(self.center)
             self.setCursor(Qt.ClosedHandCursor)
-            event.accept()
-            return
-        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self.drag_start is not None:
             scale = self.image_scale()
             delta = event.pos() - self.drag_start
             self.center = QPointF(
-                self.drag_center.x() - delta.x() / scale,
-                self.drag_center.y() - delta.y() / scale,
+                self.drag_center.x() - delta.x() / max(0.0001, scale),
+                self.drag_center.y() - delta.y() / max(0.0001, scale),
             )
-            self.clamp_center()
             self.update()
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.drag_start = None
             self.setCursor(Qt.OpenHandCursor)
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.clamp_center()
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.zoom = min(4.0, self.zoom * 1.08)
+        elif delta < 0:
+            self.zoom = max(1.0, self.zoom / 1.08)
+        self.update()
+        event.accept()
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor(theme_color("surface_deep")))
-        rect = self.image_rect().toRect()
-        painter.drawPixmap(rect, self.pixmap)
+    def set_zoom(self, value):
+        self.zoom = max(1.0, min(4.0, float(value)))
+        self.update()
+
+    def reset_view(self):
+        self.zoom = 1.0
+        self.center = QPointF(self.pixmap.width() / 2, self.pixmap.height() / 2)
+        self.update()
+
+    def get_cropped_pixmap(self):
         frame = self.crop_frame()
-        overlay = QColor(0, 0, 0, 150)
-        painter.fillRect(QRectF(0, 0, self.width(), frame.top()), overlay)
-        painter.fillRect(QRectF(0, frame.bottom(), self.width(), self.height() - frame.bottom()), overlay)
-        painter.fillRect(QRectF(0, frame.top(), frame.left(), frame.height()), overlay)
-        painter.fillRect(QRectF(frame.right(), frame.top(), self.width() - frame.right(), frame.height()), overlay)
-        painter.setPen(QPen(QColor(theme_color("accent_soft")), 3))
-        painter.drawRoundedRect(frame, 10, 10)
-        painter.setPen(QPen(QColor(255, 255, 255, 90), 1))
-        for step in (1, 2):
-            x = frame.left() + frame.width() * step / 3
-            y = frame.top() + frame.height() * step / 3
-            painter.drawLine(int(x), int(frame.top()), int(x), int(frame.bottom()))
-            painter.drawLine(int(frame.left()), int(y), int(frame.right()), int(y))
+        scale = self.image_scale()
+        rect = self.image_rect()
+
+        source_x = (frame.x() - rect.x()) / scale
+        source_y = (frame.y() - rect.y()) / scale
+        source_w = frame.width() / scale
+        source_h = frame.height() / scale
+
+        image = self.pixmap.toImage()
+        crop_rect = QRect(int(source_x), int(source_y), int(source_w), int(source_h))
+        crop_rect = crop_rect.intersected(QRect(0, 0, image.width(), image.height()))
+        cropped = image.copy(crop_rect)
+        return QPixmap.fromImage(cropped)
 
 
 class PosterCropDialog(QDialog):
-    def __init__(self, image_path, game_name="", parent=None):
+    def __init__(self, pixmap, title="Adjust Poster", parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Set Custom Poster")
+        self.setWindowTitle(title)
         self.setModal(True)
-        self.setMinimumSize(520, 720)
-        self.source_pixmap = QPixmap(image_path)
-        self.setStyleSheet(themed_qss("""
-            QDialog { background: #0B0A10; color: #ffffff; }
-            QLabel#CropTitle { color: #ffffff; font-size: 22px; font-weight: 900; }
-            QLabel#CropHint { color: #888899; font-size: 12px; font-weight: 700; }
-            QLabel#CropGame { color: #B38AFF; font-size: 13px; font-weight: 900; }
-            QFrame#CropPanel { background: #12101C; border: 1px solid #2B2640; border-radius: 14px; }
-            QSlider::groove:horizontal { height: 8px; background: #221E30; border-radius: 4px; }
-            QSlider::sub-page:horizontal { background: #B38AFF; border-radius: 4px; }
-            QSlider::handle:horizontal { background: #ffffff; border: 3px solid #B38AFF; width: 18px; height: 18px; margin: -7px 0; border-radius: 9px; }
-            QPushButton { background: #181525; color: #ffffff; border: 1px solid #2B2640; border-radius: 8px; padding: 10px 16px; font-weight: 900; }
-            QPushButton:hover { background: #231E36; border-color: #B38AFF; }
-            QPushButton#CropApply { background: #B38AFF; color: #08070D; border-color: #B38AFF; }
-            QPushButton#CropApply:hover { background: #C8AAFF; }
-        """))
-        self.build_ui(game_name)
+        self.resize(460, 680)
+        self.result_pixmap = None
 
-    def build_ui(self, game_name):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(14)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
 
-        title = QLabel("Custom Poster")
-        title.setObjectName("CropTitle")
+        self.canvas = PosterCropCanvas(pixmap, self)
+        layout.addWidget(self.canvas, stretch=1)
 
-        game_label = QLabel(str(game_name or "Selected game"))
-        game_label.setObjectName("CropGame")
-        game_label.setWordWrap(True)
-
-        hint = QLabel("Drag the image and adjust zoom. The saved poster is cropped to 2:3.")
-        hint.setObjectName("CropHint")
-        hint.setWordWrap(True)
-
-        panel = QFrame(self)
-        panel.setObjectName("CropPanel")
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(14, 14, 14, 14)
-        panel_layout.setSpacing(12)
-
-        self.canvas = PosterCropCanvas(self.source_pixmap, panel)
-        self.zoom_slider = QSlider(Qt.Horizontal, panel)
-        self.zoom_slider.setRange(100, 300)
+        slider_row = QHBoxLayout()
+        slider_label = QLabel("Zoom:")
+        slider_label.setStyleSheet("color: #ffffff; font-size: 12px;")
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setRange(100, 400)
         self.zoom_slider.setValue(100)
-        self.zoom_slider.valueChanged.connect(self.canvas.set_zoom_percent)
+        self.zoom_slider.valueChanged.connect(lambda val: self.canvas.set_zoom(val / 100.0))
 
-        panel_layout.addWidget(self.canvas, stretch=1)
-        panel_layout.addWidget(self.zoom_slider)
+        reset_btn = QPushButton("Reset")
+        reset_btn.setObjectName("CropButton")
+        reset_btn.clicked.connect(self.canvas.reset_view)
+        reset_btn.clicked.connect(lambda: self.zoom_slider.setValue(100))
 
-        actions = QHBoxLayout()
-        actions.addStretch()
+        slider_row.addWidget(slider_label)
+        slider_row.addWidget(self.zoom_slider, stretch=1)
+        slider_row.addWidget(reset_btn)
+        layout.addLayout(slider_row)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(10)
+
         cancel_btn = QPushButton("Cancel")
-        apply_btn = QPushButton("Use Poster")
-        apply_btn.setObjectName("CropApply")
+        cancel_btn.setObjectName("CropCancelButton")
         cancel_btn.clicked.connect(self.reject)
-        apply_btn.clicked.connect(self.accept)
-        actions.addWidget(cancel_btn)
-        actions.addWidget(apply_btn)
 
-        layout.addWidget(title)
-        layout.addWidget(game_label)
-        layout.addWidget(hint)
-        layout.addWidget(panel, stretch=1)
-        layout.addLayout(actions)
+        save_btn = QPushButton("Save Poster")
+        save_btn.setObjectName("CropSaveButton")
+        save_btn.clicked.connect(self.save_and_accept)
 
-    def cropped_pixmap(self):
-        return self.canvas.crop_pixmap()
+        buttons.addWidget(cancel_btn)
+        buttons.addWidget(save_btn)
+        layout.addLayout(buttons)
+
+    def save_and_accept(self):
+        self.result_pixmap = self.canvas.get_cropped_pixmap()
+        self.accept()
 
 
 class LoadingSpinner(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, size=32):
         super().__init__(parent)
+        self.size = size
         self.angle = 0
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.tick)
-        self.setFixedSize(54, 54)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.timer.timeout.connect(self.rotate)
+        self.setFixedSize(size, size)
+
+    def rotate(self):
+        self.angle = (self.angle + 30) % 360
+        self.update()
 
     def start(self):
         if not self.timer.isActive():
-            self.timer.start(32)
+            self.timer.start(50)
 
     def stop(self):
         self.timer.stop()
 
-    def tick(self):
-        self.angle = (self.angle + 30) % 360
-        self.update()
-
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        center = self.rect().center()
-        radius = max(6, min(self.width(), self.height()) // 2 - 7)
-        tick = max(3, int(radius * 0.4))
+        center = QPointF(self.width() / 2, self.height() / 2)
+        radius = (self.width() - 8) / 2
+        tick = 4
+        accent = QColor(theme_color("accent"))
+
         for index in range(12):
-            alpha = int(40 + (index / 11) * 215)
-            color = QColor(179, 138, 255, alpha)
+            opacity = int(255 * (index + 1) / 12)
+            color = QColor(accent.red(), accent.green(), accent.blue(), opacity)
             painter.setPen(QPen(color, 4, Qt.SolidLine, Qt.RoundCap))
             painter.save()
             painter.translate(center)
@@ -356,12 +357,76 @@ class LoadingSpinner(QWidget):
 
 
 class SmoothScrollArea(QScrollArea):
+    """
+    Optimized kinetic touch & mouse drag scroll area designed for handheld ergonomics (Legion Go).
+    Allows vertical flicking, swiping, and inertia momentum deceleration anywhere on the viewport.
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
         self._scroll_target = 0
         self._scroll_animation = QPropertyAnimation(self.verticalScrollBar(), b"value", self)
-        self._scroll_animation.setDuration(420)
+        self._scroll_animation.setDuration(400)
         self._scroll_animation.setEasingCurve(QEasingCurve.OutCubic)
+
+        # Kinetic Touch & Drag Tracking
+        self._is_dragging = False
+        self._drag_start_y = 0
+        self._last_drag_y = 0
+        self._last_drag_time = 0.0
+        self._velocity = 0.0
+        self._drag_threshold = 8
+        self._drag_occurred = False
+
+        if self.viewport():
+            self.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if obj == self.viewport():
+            event_type = event.type()
+            if event_type == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._is_dragging = True
+                self._drag_start_y = event.pos().y()
+                self._last_drag_y = event.pos().y()
+                self._last_drag_time = time.time()
+                self._velocity = 0.0
+                self._drag_occurred = False
+                self._scroll_animation.stop()
+
+            elif event_type == QEvent.MouseMove and self._is_dragging:
+                current_y = event.pos().y()
+                delta_y = current_y - self._last_drag_y
+                total_delta = abs(current_y - self._drag_start_y)
+
+                if total_delta > self._drag_threshold:
+                    self._drag_occurred = True
+
+                now = time.time()
+                dt = max(0.001, now - self._last_drag_time)
+                self._velocity = (-delta_y) / dt
+                self._last_drag_y = current_y
+                self._last_drag_time = now
+
+                bar = self.verticalScrollBar()
+                if bar:
+                    bar.setValue(bar.value() - delta_y)
+                return self._drag_occurred
+
+            elif event_type == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton and self._is_dragging:
+                self._is_dragging = False
+                bar = self.verticalScrollBar()
+                if bar and abs(self._velocity) > 60:
+                    momentum_offset = int(self._velocity * 0.32)
+                    target = max(bar.minimum(), min(bar.maximum(), bar.value() + momentum_offset))
+                    self._scroll_animation.stop()
+                    self._scroll_animation.setDuration(480)
+                    self._scroll_animation.setStartValue(bar.value())
+                    self._scroll_animation.setEndValue(target)
+                    self._scroll_animation.start()
+
+                if self._drag_occurred:
+                    return True
+
+        return super().eventFilter(obj, event)
 
     def wheelEvent(self, event):
         bar = self.verticalScrollBar()
@@ -402,6 +467,7 @@ class GameCard(QFrame):
     clicked = pyqtSignal(int)
     action_clicked = pyqtSignal(int)
     poster_context_requested = pyqtSignal(int)
+    checked_toggled = pyqtSignal(int, bool)
 
     def __init__(
         self,
@@ -409,16 +475,19 @@ class GameCard(QFrame):
         game,
         format_size_func,
         selected=False,
+        checked=False,
         action_text="Compress",
         card_width=MIN_CARD_W,
         poster_width=None,
         poster_height=None,
+        scroll_parent=None,
     ):
         super().__init__()
 
         self.index = index
         self.game = game
         self.format_size = format_size_func
+        self.scroll_parent = scroll_parent
         self.poster_width = int(poster_width or max(1, card_width - POSTER_W_PADDING))
         self.poster_height = int(poster_height or self.poster_width * POSTER_ASPECT)
 
@@ -428,13 +497,34 @@ class GameCard(QFrame):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 8)
-        layout.setSpacing(7)
+        layout.setSpacing(6)
+
+        # Header row: Checkbox and Traffic Light Pill
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.checkbox = QCheckBox()
+        self.checkbox.setStyleSheet(CHECKBOX_STYLE)
+        self.checkbox.setChecked(bool(checked))
+        self.checkbox.toggled.connect(lambda c: self.checked_toggled.emit(self.index, c))
+
+        traffic_light, badge_text, preview_text = calculate_savings_preview(game)
+        light_color = "#00E676" if traffic_light == "green" else "#FFD166" if traffic_light == "yellow" else "#FF4D6D" if traffic_light == "red" else "#888899"
+
+        self.traffic_badge = QLabel(f"● {badge_text}")
+        self.traffic_badge.setStyleSheet(f"color: {light_color}; font-size: 10px; font-weight: bold; background: transparent;")
+        self.traffic_badge.setToolTip(f"Compressibility: {badge_text}")
+
+        header_layout.addWidget(self.checkbox)
+        header_layout.addStretch()
+        header_layout.addWidget(self.traffic_badge)
+        layout.addLayout(header_layout)
 
         self.poster = PosterLabel()
         self.poster.setFixedSize(self.poster_width, self.poster_height)
         self.poster.setAlignment(Qt.AlignCenter)
         self.poster.setObjectName("Poster")
-        self.poster.left_clicked.connect(lambda: self.clicked.emit(self.index))
+        self.poster.left_clicked.connect(self._handle_click)
         self.poster.right_clicked.connect(lambda: self.poster_context_requested.emit(self.index))
 
         self.load_poster()
@@ -443,15 +533,14 @@ class GameCard(QFrame):
         self.name_label.setAlignment(Qt.AlignCenter)
         self.name_label.setWordWrap(True)
         self.name_label.setObjectName("CardName")
-        self.name_label.setMinimumHeight(34)
-        self.name_label.setMaximumHeight(38)
+        self.name_label.setMinimumHeight(32)
+        self.name_label.setMaximumHeight(36)
 
         status = game.get("status", "Unknown")
         size = original_game_size(game)
         compressed_size = int(game.get("compressed_size", 0) or 0)
 
         meta_text = f"{status} | {self.format_size(size)}"
-
         if compressed_size > 0:
             meta_text = f"{status} | {self.format_size(size)} -> {self.format_size(compressed_size)}"
 
@@ -459,36 +548,35 @@ class GameCard(QFrame):
         self.meta_label.setAlignment(Qt.AlignCenter)
         self.meta_label.setWordWrap(True)
         self.meta_label.setObjectName("CardMeta")
-        self.meta_label.setMinimumHeight(30)
-        self.meta_label.setMaximumHeight(36)
+        self.meta_label.setMinimumHeight(24)
+        self.meta_label.setMaximumHeight(30)
 
-        self.poster_status_label = QLabel(game.get("poster_status", ""))
-        self.poster_status_label.setAlignment(Qt.AlignCenter)
-        self.poster_status_label.setObjectName("SavedMeta")
-        self.poster_status_label.setMinimumHeight(16)
-        self.poster_status_label.setMaximumHeight(18)
+        # Potential / Actual Savings Preview Text
+        self.savings_label = QLabel(preview_text)
+        self.savings_label.setAlignment(Qt.AlignCenter)
+        self.savings_label.setStyleSheet("color: #B38AFF; font-size: 11px; font-weight: bold; background: transparent;")
+        self.savings_label.setMinimumHeight(16)
+        self.savings_label.setMaximumHeight(18)
 
         self.action_btn = QPushButton(action_text)
         self.action_btn.setObjectName("CardActionButton")
         self.action_btn.setProperty(
             "state", "disable" if action_text == "Decompress" else "enable"
         )
-        self.action_btn.setFixedHeight(34)
+        self.action_btn.setFixedHeight(32)
         self.action_btn.clicked.connect(lambda: self.action_clicked.emit(self.index))
 
         layout.addWidget(self.poster, alignment=Qt.AlignCenter)
         layout.addWidget(self.name_label)
         layout.addWidget(self.meta_label)
-        layout.addWidget(self.poster_status_label)
+        layout.addWidget(self.savings_label)
         layout.addWidget(self.action_btn)
 
     def load_poster(self):
         poster_path = self.game.get("poster", "")
-
         if poster_path and os.path.exists(poster_path):
             poster_path = sanitize_png_file(poster_path)
             pixmap = QPixmap(poster_path)
-
             if not pixmap.isNull():
                 pixmap = pixmap.scaled(
                     self.poster_width,
@@ -496,7 +584,6 @@ class GameCard(QFrame):
                     Qt.KeepAspectRatio,
                     Qt.SmoothTransformation,
                 )
-
                 self.poster.setPixmap(pixmap)
                 return
 
@@ -504,10 +591,14 @@ class GameCard(QFrame):
         self.poster.setText(status if status else "No Poster")
         self.poster.setStyleSheet(themed_qss("background: transparent; color:#ffffff; border:none;"))
 
+    def _handle_click(self):
+        if self.scroll_parent and getattr(self.scroll_parent, "_drag_occurred", False):
+            return
+        self.clicked.emit(self.index)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.index)
-
+            self._handle_click()
         super().mousePressEvent(event)
 
 
@@ -515,35 +606,61 @@ class GameRow(QFrame):
     clicked = pyqtSignal(int)
     action_clicked = pyqtSignal(int)
     poster_context_requested = pyqtSignal(int)
+    checked_toggled = pyqtSignal(int, bool)
 
-    def __init__(self, index, game, format_size_func, selected=False, action_text="Compress"):
+    def __init__(
+        self,
+        index,
+        game,
+        format_size_func,
+        selected=False,
+        checked=False,
+        action_text="Compress",
+        scroll_parent=None,
+    ):
         super().__init__()
 
         self.index = index
         self.game = game
         self.format_size = format_size_func
+        self.scroll_parent = scroll_parent
         self.setObjectName("GameCardSelected" if selected else "GameCard")
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(76)
+        self.setFixedHeight(78)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
+
+        # Multi-select checkbox on the left edge
+        self.checkbox = QCheckBox()
+        self.checkbox.setStyleSheet(CHECKBOX_STYLE)
+        self.checkbox.setChecked(bool(checked))
+        self.checkbox.toggled.connect(lambda c: self.checked_toggled.emit(self.index, c))
 
         self.poster = PosterLabel()
         self.poster.setFixedSize(44, 58)
         self.poster.setAlignment(Qt.AlignCenter)
         self.poster.setObjectName("Poster")
-        self.poster.left_clicked.connect(lambda: self.clicked.emit(self.index))
+        self.poster.left_clicked.connect(self._handle_click)
         self.poster.right_clicked.connect(lambda: self.poster_context_requested.emit(self.index))
         self.load_poster()
 
         self.name_label = QLabel(game.get("name", "Unknown"))
         self.name_label.setObjectName("RowName")
         self.name_label.setWordWrap(False)
-        self.name_label.setFixedWidth(210)
+        self.name_label.setFixedWidth(190)
         self.name_label.setToolTip(game.get("name", "Unknown"))
+
+        # Traffic light indicator pill
+        traffic_light, badge_text, preview_text = calculate_savings_preview(game)
+        light_color = "#00E676" if traffic_light == "green" else "#FFD166" if traffic_light == "yellow" else "#FF4D6D" if traffic_light == "red" else "#888899"
+
+        self.traffic_badge = QLabel(f"● {badge_text}")
+        self.traffic_badge.setStyleSheet(f"color: {light_color}; font-size: 11px; font-weight: bold; background: transparent;")
+        self.traffic_badge.setFixedWidth(155)
+        self.traffic_badge.setToolTip(f"Compressibility: {badge_text}")
 
         status = game.get("status", "Unknown")
         size = original_game_size(game)
@@ -555,23 +672,25 @@ class GameRow(QFrame):
         self.meta_label = QLabel(f"{status} | {size_text}")
         self.meta_label.setObjectName("RowMeta")
         self.meta_label.setWordWrap(False)
-        self.meta_label.setFixedWidth(255)
+        self.meta_label.setFixedWidth(210)
 
-        saved_amount = background_saved_bytes(game) if compressed_size > 0 else 0
-        self.saved_label = QLabel(f"Saved: {self.format_size(saved_amount)}")
-        self.saved_label.setObjectName("RowSavedMeta")
-        self.saved_label.setFixedWidth(118)
+        # Pre-calculated savings preview or saved size
+        self.saved_label = QLabel(preview_text)
+        self.saved_label.setStyleSheet("color: #B38AFF; font-size: 11px; font-weight: bold; background: transparent;")
+        self.saved_label.setFixedWidth(130)
 
         self.action_btn = QPushButton(action_text)
         self.action_btn.setObjectName("CardActionButton")
         self.action_btn.setProperty(
             "state", "disable" if action_text == "Decompress" else "enable"
         )
-        self.action_btn.setFixedWidth(130)
+        self.action_btn.setFixedWidth(120)
         self.action_btn.clicked.connect(lambda: self.action_clicked.emit(self.index))
 
+        layout.addWidget(self.checkbox)
         layout.addWidget(self.poster)
         layout.addWidget(self.name_label)
+        layout.addWidget(self.traffic_badge)
         layout.addWidget(self.meta_label)
         layout.addWidget(self.saved_label)
         layout.addStretch(1)
@@ -579,7 +698,6 @@ class GameRow(QFrame):
 
     def load_poster(self):
         poster_path = self.game.get("poster", "")
-
         if poster_path and os.path.exists(poster_path):
             poster_path = sanitize_png_file(poster_path)
             pixmap = QPixmap(poster_path)
@@ -593,10 +711,14 @@ class GameRow(QFrame):
         self.poster.setText(status if status else "No Poster")
         self.poster.setStyleSheet(themed_qss("background: transparent; color:#ffffff; border:none;"))
 
+    def _handle_click(self):
+        if self.scroll_parent and getattr(self.scroll_parent, "_drag_occurred", False):
+            return
+        self.clicked.emit(self.index)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.index)
-
+            self._handle_click()
         super().mousePressEvent(event)
 
 
@@ -610,6 +732,8 @@ class XGCRGameLibraryPage(QWidget):
     game_action_requested = pyqtSignal(int)
     custom_poster_requested = pyqtSignal(int)
     view_mode_changed = pyqtSignal(str)
+    batch_compress_requested = pyqtSignal(list)
+    selection_changed = pyqtSignal(list)
 
     def __init__(self, format_size_func, card_action_text_func, initial_view_mode="grid"):
         super().__init__()
@@ -617,6 +741,7 @@ class XGCRGameLibraryPage(QWidget):
         self.card_action_text = card_action_text_func
         self.current_games = []
         self.current_selected_index = None
+        self.selected_indices = set()
         self.current_columns = 0
         self.current_card_width = 0
         self.reflow_pending = False
@@ -631,7 +756,6 @@ class XGCRGameLibraryPage(QWidget):
     def grid_metrics(self):
         available = self.width()
         if hasattr(self, "scroll") and self.scroll.viewport():
-                                                                                                 
             available = int(self.scroll.viewport().width() or available)
         available = max(MIN_CARD_W, int(available or MIN_CARD_W))
         columns = max(1, (available + GRID_SPACING) // (MIN_CARD_W + GRID_SPACING))
@@ -669,6 +793,12 @@ class XGCRGameLibraryPage(QWidget):
         self.remove_btn = QPushButton("Remove")
         self.size_btn = QPushButton("Refresh Sizes")
         self.poster_btn = QPushButton("Refresh Posters")
+
+        # Handheld Batch Operations Toolbar Controls
+        self.select_all_btn = QPushButton("Select All")
+        self.batch_compress_btn = QPushButton("⚡ Batch Compress (0)")
+        self.batch_compress_btn.setStyleSheet(themed_qss("background: #7B2CBF; color: #ffffff; font-weight: bold;"))
+
         self.grid_view_btn = QPushButton("Grid")
         self.row_view_btn = QPushButton("Rows")
 
@@ -678,6 +808,8 @@ class XGCRGameLibraryPage(QWidget):
             self.remove_btn,
             self.size_btn,
             self.poster_btn,
+            self.select_all_btn,
+            self.batch_compress_btn,
         ):
             action_button.setObjectName("TopActionButton")
 
@@ -694,6 +826,8 @@ class XGCRGameLibraryPage(QWidget):
         self.remove_btn.clicked.connect(self.remove_selected_requested.emit)
         self.size_btn.clicked.connect(self.refresh_sizes_requested.emit)
         self.poster_btn.clicked.connect(self.refresh_posters_requested.emit)
+        self.select_all_btn.clicked.connect(self.toggle_select_all)
+        self.batch_compress_btn.clicked.connect(self.trigger_batch_compress)
         self.grid_view_btn.clicked.connect(lambda: self.set_view_mode("grid"))
         self.row_view_btn.clicked.connect(lambda: self.set_view_mode("rows"))
 
@@ -702,7 +836,10 @@ class XGCRGameLibraryPage(QWidget):
         actions.addWidget(self.scan_btn)
         actions.addWidget(self.add_btn)
         actions.addWidget(self.remove_btn)
-        actions.addSpacing(8)
+        actions.addSpacing(6)
+        actions.addWidget(self.select_all_btn)
+        actions.addWidget(self.batch_compress_btn)
+        actions.addSpacing(6)
         actions.addWidget(self.size_btn)
         actions.addWidget(self.poster_btn)
         actions.addStretch()
@@ -804,6 +941,37 @@ class XGCRGameLibraryPage(QWidget):
         self.view_mode_changed.emit(mode)
         self.refresh_grid(self.current_games, self.current_selected_index)
 
+    def handle_row_checked_toggled(self, index, checked):
+        if checked:
+            self.selected_indices.add(index)
+        else:
+            self.selected_indices.discard(index)
+        self.update_batch_button_ui()
+        self.selection_changed.emit(list(self.selected_indices))
+
+    def update_batch_button_ui(self):
+        count = len(self.selected_indices)
+        self.batch_compress_btn.setText(f"⚡ Batch Compress ({count})")
+        if self.current_games and len(self.selected_indices) >= len(self.current_games):
+            self.select_all_btn.setText("Deselect All")
+        else:
+            self.select_all_btn.setText("Select All")
+
+    def toggle_select_all(self):
+        if len(self.selected_indices) >= len(self.current_games) and self.current_games:
+            self.selected_indices.clear()
+        else:
+            self.selected_indices = set(range(len(self.current_games)))
+
+        self.refresh_grid(self.current_games, self.current_selected_index)
+        self.update_batch_button_ui()
+        self.selection_changed.emit(list(self.selected_indices))
+
+    def trigger_batch_compress(self):
+        if not self.selected_indices:
+            return
+        self.batch_compress_requested.emit(list(self.selected_indices))
+
     def refresh_grid(self, games, selected_index):
         self.current_games = list(games or [])
         self.current_selected_index = selected_index
@@ -816,11 +984,11 @@ class XGCRGameLibraryPage(QWidget):
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             widget = item.widget()
-
             if widget:
                 widget.deleteLater()
 
         for index, game in enumerate(self.current_games):
+            is_checked = index in self.selected_indices
             if self.view_mode == "rows":
                 row = index
                 col = 0
@@ -829,7 +997,9 @@ class XGCRGameLibraryPage(QWidget):
                     game=game,
                     format_size_func=self.format_size,
                     selected=index == selected_index,
+                    checked=is_checked,
                     action_text=self.card_action_text(game),
+                    scroll_parent=self.scroll,
                 )
             else:
                 row = index // columns
@@ -839,15 +1009,19 @@ class XGCRGameLibraryPage(QWidget):
                     game=game,
                     format_size_func=self.format_size,
                     selected=index == selected_index,
+                    checked=is_checked,
                     action_text=self.card_action_text(game),
                     card_width=card_width,
                     poster_width=poster_width,
                     poster_height=poster_height,
+                    scroll_parent=self.scroll,
                 )
 
             card.clicked.connect(self.game_selected.emit)
             card.action_clicked.connect(self.game_action_requested.emit)
             card.poster_context_requested.connect(self.custom_poster_requested.emit)
+            card.checked_toggled.connect(self.handle_row_checked_toggled)
+
             alignment = Qt.AlignTop if self.view_mode == "rows" else Qt.AlignTop | Qt.AlignLeft
             self.grid_layout.addWidget(card, row, col, alignment)
 
@@ -858,6 +1032,7 @@ class XGCRGameLibraryPage(QWidget):
         else:
             self.grid_layout.setColumnStretch(columns, 1)
         self.grid_layout.setRowStretch((len(self.current_games) // columns) + 1, 1)
+        self.update_batch_button_ui()
         self.schedule_grid_reflow()
 
     def resizeEvent(self, event):
@@ -883,3 +1058,5 @@ class XGCRGameLibraryPage(QWidget):
         self.remove_btn.setEnabled(enabled)
         self.size_btn.setEnabled(enabled)
         self.poster_btn.setEnabled(enabled)
+        self.select_all_btn.setEnabled(enabled)
+        self.batch_compress_btn.setEnabled(enabled)

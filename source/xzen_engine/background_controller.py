@@ -11,7 +11,7 @@ from .constants import (
 )
 from .deps import StateMachine, get_logger, has_transitions
 from .formatting import format_game_size
-from .app_state import background_saved_bytes, original_game_size
+from .app_state import background_saved_bytes, is_game_compressed, original_game_size
 from .workers import CompactWorker
 
 LOGGER = get_logger(__name__)
@@ -90,6 +90,52 @@ class BackgroundRunController:
             f"{decompress_count} decompress task(s)."
         )
         LOGGER.info("background_queue_started", compress_tasks=compress_count, decompress_tasks=decompress_count)
+        h.update_dashboard()
+        self.start_next_background_compress_game()
+
+    def start_batch_compress_queue(self, indices):
+        h = self.host
+        if h.busy:
+            QMessageBox.warning(h, APP_NAME, "A task is already running.")
+            return
+
+        if not indices:
+            h.log("No games selected for batch compression.")
+            return
+
+        queue = []
+        for idx in indices:
+            if 0 <= idx < len(h.games):
+                game = h.games[idx]
+                ok, _ = h.manual_path_allowed(game["path"]) if hasattr(h, "manual_path_allowed") else (True, "")
+                if ok:
+                    action = "decompress" if is_game_compressed(game) else "compress"
+                    queue.append({"action": action, "index": idx})
+
+        if not queue:
+            h.log("No valid games in batch selection.")
+            return
+
+        h.background_queue = queue
+        self._transition("begin", "running")
+        h.background_total = len(h.background_queue)
+        h.background_current_index = None
+        h.background_status_text = f"Preparing {h.background_total} batch task(s)..."
+        h.reset_background_progress_bars(
+            h.background_status_text,
+            "Preparing batch queue 0%",
+            "Game data waiting",
+            "Files waiting",
+        )
+        h.busy = True
+        h.set_buttons_enabled(False)
+        compress_count = sum(1 for item in h.background_queue if item.get("action") == "compress")
+        decompress_count = sum(1 for item in h.background_queue if item.get("action") == "decompress")
+        h.log(
+            f"Batch queue started: {compress_count} compress task(s), "
+            f"{decompress_count} decompress task(s)."
+        )
+        LOGGER.info("batch_queue_started", compress_tasks=compress_count, decompress_tasks=decompress_count)
         h.update_dashboard()
         self.start_next_background_compress_game()
 

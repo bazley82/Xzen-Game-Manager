@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 import subprocess
 import threading
@@ -17,6 +17,7 @@ from .constants import (
     MAX_SPEED_CHUNK_BYTES,
     HUGE_FILE_SEQUENTIAL_BYTES,
     HUGE_FILE_WARNING_BYTES,
+    PRECOMPRESSED_MEDIA_EXTENSIONS,
     compression_algorithm_compact_value,
     normalized_worker_mode,
     normalized_worker_count,
@@ -508,12 +509,17 @@ class CompactWorker(QThread):
 
     def collect_files(self):
         files = []
+        is_compressing = str(self.action_label or "").lower().startswith("compress")
         for folder, _, names in os.walk(self.target_path):
             if self.cancel_requested:
                 break
             for name in names:
                 if self.cancel_requested:
                     break
+                if is_compressing:
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext in PRECOMPRESSED_MEDIA_EXTENSIONS:
+                        continue
                 file_path = os.path.join(folder, name)
                 try:
                     size = os.path.getsize(file_path)

@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 
 from .constants import EXCLUDED_STEAM_APPIDS, EXCLUDED_STEAM_NAMES

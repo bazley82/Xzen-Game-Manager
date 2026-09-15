@@ -239,6 +239,7 @@ class XGCRSettingsPage(QWidget):
         close_to_tray=False,
         worker_mode="auto",
         worker_count=4,
+        auto_compress_monitor=False,
     ):
         super().__init__()
         self.algorithms = algorithms
@@ -255,6 +256,7 @@ class XGCRSettingsPage(QWidget):
             close_to_tray,
             worker_mode,
             worker_count,
+            auto_compress_monitor,
         )
 
     def build_ui(
@@ -266,6 +268,7 @@ class XGCRSettingsPage(QWidget):
         close_to_tray,
         worker_mode,
         worker_count,
+        auto_compress_monitor=False,
     ):
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -438,6 +441,13 @@ class XGCRSettingsPage(QWidget):
             behavior_section,
             behavior_layout,
         )
+        self.auto_compress_monitor_toggle = self.option_toggle(
+            "Auto-compress background monitor",
+            "Watches launcher directories for newly downloaded games and schedules LZX compression when idle.",
+            auto_compress_monitor,
+            behavior_section,
+            behavior_layout,
+        )
         self.admin_toggle = self.option_toggle(
             "Launch as admin",
             "Turn this off if Print Screen or Snipping Tool does not trigger while the app is focused.",
@@ -456,6 +466,7 @@ class XGCRSettingsPage(QWidget):
         self.worker_slider.valueChanged.connect(self.on_worker_slider_changed)
         self.terminal_toggle.toggled.connect(self.emit_settings)
         self.smart_pause_toggle.toggled.connect(self.emit_settings)
+        self.auto_compress_monitor_toggle.toggled.connect(self.emit_settings)
         self.close_to_tray_toggle.toggled.connect(self.emit_settings)
         self.admin_toggle.toggled.connect(self.emit_settings)
 
@@ -553,6 +564,7 @@ class XGCRSettingsPage(QWidget):
             "worker_count": self.worker_slider.value(),
             "show_terminal": self.terminal_toggle.isChecked(),
             "smart_game_pause": self.smart_pause_toggle.isChecked(),
+            "auto_compress_monitor": self.auto_compress_monitor_toggle.isChecked(),
             "close_to_tray": self.close_to_tray_toggle.isChecked(),
             "launch_as_admin": self.admin_toggle.isChecked(),
         }

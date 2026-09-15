@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 from pathlib import Path
 
@@ -77,6 +77,19 @@ COMPRESSION_ALGORITHMS = [
 
 VALID_WORKER_MODES = {"auto", "1", "2", "4", "custom"}
 BACKGROUND_SELECTION_MODES = {"all", "custom"}
+
+DEFAULT_AUTO_COMPRESS_MONITOR = False
+MONITOR_IDLE_SECONDS_REQUIRED = 30
+MONITOR_POLL_INTERVAL_SECONDS = 15
+
+PRECOMPRESSED_MEDIA_EXTENSIONS = {
+    # Video containers & codecs
+    ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm", ".m4v", ".flv", ".bik", ".bk2",
+    # Audio codecs
+    ".mp3", ".ogg", ".aac", ".flac", ".wma", ".m4a", ".opus", ".ac3", ".dts",
+    # Pre-compressed archives
+    ".zip", ".rar", ".7z", ".tar", ".gz", ".xz", ".bz2", ".zst",
+}
 
 BLOCKED_PATHS = [
     os.environ.get("WINDIR", r"C:\Windows"),

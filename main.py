@@ -71,6 +71,7 @@ from source.xzen_engine.background_jobs import (
     build_game_detection_paths as state_build_game_detection_paths,
 )
 from source.xzen_engine.background_controller import BackgroundRunController
+from source.xzen_engine.auto_monitor import AutoCompressMonitor
 from source.xzen_engine.constants import APP_ICON_FILE
 from source.xzen_engine.deps import get_logger
 from source.xzen_engine.posters import safe_cache_name
@@ -165,6 +166,17 @@ class XzenGameManager(QMainWindow):
         self.run_first_launch_scan_if_needed()
         self.refresh_grid()
         self.update_dashboard()
+        self.auto_compress_monitor = AutoCompressMonitor(
+            get_watched_paths_fn=self.get_launcher_library_roots,
+            get_existing_games_fn=lambda: self.games,
+            trigger_compress_fn=self.auto_compress_game_folder,
+            is_busy_fn=lambda: bool(self.busy),
+        )
+        self.auto_compress_monitor.log.connect(self.log)
+        self.auto_compress_monitor.set_enabled(
+            bool(self.app_settings.get("auto_compress_monitor", False))
+        )
+        self.auto_compress_monitor.start()
 
     def apply_style(self):
         self.setStyleSheet(themed_qss("""
@@ -682,6 +694,7 @@ class XzenGameManager(QMainWindow):
         self.game_library_page.game_action_requested.connect(self.run_card_action)
         self.game_library_page.custom_poster_requested.connect(self.set_custom_poster)
         self.game_library_page.view_mode_changed.connect(self.apply_library_view_mode)
+        self.game_library_page.batch_compress_requested.connect(self.run_batch_compression)
         self.apply_terminal_visibility()
 
         self.fsr_mods_page = None
@@ -696,6 +709,7 @@ class XzenGameManager(QMainWindow):
             bool(self.app_settings.get("close_to_tray", False)),
             normalized_worker_mode(self.app_settings.get("worker_mode", DEFAULT_WORKER_MODE)),
             normalized_worker_count(self.app_settings.get("worker_count", DEFAULT_WORKER_COUNT)),
+            bool(self.app_settings.get("auto_compress_monitor", False)),
         )
         self.settings_page.settings_changed.connect(self.apply_settings_values)
 
@@ -1322,6 +1336,8 @@ class XzenGameManager(QMainWindow):
         self.unregister_global_insert_hotkey()
         if hasattr(self, "quick_stats_window") and self.quick_stats_window is not None:
             self.quick_stats_window.close()
+        if hasattr(self, "auto_compress_monitor") and self.auto_compress_monitor is not None:
+            self.auto_compress_monitor.stop()
         if self.tray_icon:
             self.tray_icon.hide()
         super().closeEvent(event)
@@ -1427,8 +1443,11 @@ class XzenGameManager(QMainWindow):
         self.app_settings["worker_count"] = normalized_worker_count(values.get("worker_count", DEFAULT_WORKER_COUNT))
         self.app_settings["show_terminal"] = bool(values.get("show_terminal", False))
         self.app_settings["smart_game_pause"] = bool(values.get("smart_game_pause", AUTO_PAUSE_WHEN_GAME_RUNNING))
+        self.app_settings["auto_compress_monitor"] = bool(values.get("auto_compress_monitor", False))
         self.app_settings["close_to_tray"] = bool(values.get("close_to_tray", False))
         self.app_settings["launch_as_admin"] = bool(values.get("launch_as_admin", DEFAULT_LAUNCH_AS_ADMIN))
+        if hasattr(self, "auto_compress_monitor") and self.auto_compress_monitor is not None:
+            self.auto_compress_monitor.set_enabled(self.app_settings["auto_compress_monitor"])
         self.save_settings()
         self.apply_terminal_visibility()
         self.update_compress_button_text()
@@ -2169,6 +2188,49 @@ class XzenGameManager(QMainWindow):
 
     def finish_background_compress(self, message):
         self.background_controller.finish_background_compress(message)
+
+    def run_batch_compression(self, indices):
+        self.background_controller.start_batch_compress_queue(indices)
+
+    def get_launcher_library_roots(self):
+        roots = []
+        try:
+            from source.xzen_engine.steam import get_steam_path
+            steam_path = get_steam_path()
+            if steam_path:
+                steamapps = os.path.join(steam_path, "steamapps", "common")
+                if os.path.isdir(steamapps):
+                    roots.append(steamapps)
+        except Exception:
+            pass
+        for path in self.game_detection_paths():
+            parent = os.path.dirname(path)
+            if parent and os.path.isdir(parent) and parent not in roots:
+                roots.append(parent)
+        return roots
+
+    def auto_compress_game_folder(self, candidate):
+        path = candidate.get("path", "")
+        if not path or not os.path.isdir(path):
+            return False
+        existing_idx = next(
+            (i for i, g in enumerate(self.games) if os.path.normpath(g.get("path", "")).lower() == os.path.normpath(path).lower()),
+            None
+        )
+        if existing_idx is None:
+            new_game = {
+                "name": candidate.get("name", os.path.basename(path)),
+                "path": path,
+                "status": "Normal",
+                "source": "Auto-Detected",
+            }
+            self.games.append(new_game)
+            existing_idx = len(self.games) - 1
+            self.save_games()
+            self.refresh_grid()
+
+        self.run_compact_task(existing_idx, "Compressed", "Compressing", "LZX")
+        return True
 
     def game_library_page_is_active(self):
         return (

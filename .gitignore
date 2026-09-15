@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+.DS_Store
+.venv/
+env/
+dist/
+build/
+*.spec
+source/logs/*.log
+source/settings/user_settings/

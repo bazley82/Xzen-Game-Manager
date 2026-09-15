@@ -1,4 +1,4 @@
-﻿from .constants import *
+from .constants import *
 from .system import *
 from .formatting import *
 from .steam import *
