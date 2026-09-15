@@ -2910,8 +2910,12 @@ if __name__ == "__main__":
         if relaunch_as_admin():
             sys.exit(0)
 
+    # ── High-DPI and Touch setup (must be set BEFORE QApplication construction) ──
+    # Enable automatic DPI scaling so the UI respects Windows display scaling
+    # (e.g. 150%/200% on the Legion Go's 1920x1200 8.8" high-PPI screen).
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     # Enable touch-to-mouse synthesis for widgets that don't handle touch natively.
-    # This must be set BEFORE QApplication is constructed.
     QApplication.setAttribute(Qt.AA_SynthesizeMouseForUnhandledTouchEvents, True)
 
     app = QApplication(sys.argv)

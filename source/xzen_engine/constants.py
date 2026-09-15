@@ -40,7 +40,7 @@ FSR_BACKUP_DIR = USER_SETTINGS_DIR / "fsr_backups"
 ASSETS_DIR = SOURCE_DIR / "assets"
 APP_ICON_FILE = ASSETS_DIR / "xzen.ico"
 
-BUILD_VERSION = "v1.2.0-LG"
+BUILD_VERSION = "v1.2.1-LG"
 APP_NAME = f"Xzen Game Manager {BUILD_VERSION}"
 DATA_FILE = str(USER_SETTINGS_DIR / "xzen_games.json")
 SETTINGS_FILE = str(USER_SETTINGS_DIR / "xzen_settings.json")
