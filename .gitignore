@@ -7,6 +7,5 @@ __pycache__/
 env/
 dist/
 build/
-*.spec
 source/logs/*.log
 source/settings/user_settings/

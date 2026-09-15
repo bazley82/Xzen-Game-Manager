@@ -28,9 +28,43 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Purge ALL __pycache__ and stale .pyc files
+        shell: bash
+        run: |
+          echo "=== Removing all __pycache__ directories and .pyc files ==="
+          find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find . -name "*.pyc" -delete 2>/dev/null || true
+          echo "=== Cleanup complete ==="
+
+      - name: Verify modified source files are present
+        shell: bash
+        run: |
+          echo "=== Verifying new features exist in source ==="
+          # Check compressibility module exists
+          if [ ! -f "source/xzen_engine/compressibility.py" ]; then
+            echo "ERROR: compressibility.py is missing!"
+            exit 1
+          fi
+          # Check auto_monitor module exists
+          if [ ! -f "source/xzen_engine/auto_monitor.py" ]; then
+            echo "ERROR: auto_monitor.py is missing!"
+            exit 1
+          fi
+          # Verify GameCard has checkbox
+          grep -q "QCheckBox" source/tabs/game_library.py || { echo "ERROR: QCheckBox not found in game_library.py!"; exit 1; }
+          # Verify traffic light calculation
+          grep -q "calculate_savings_preview" source/tabs/game_library.py || { echo "ERROR: calculate_savings_preview not found in game_library.py!"; exit 1; }
+          # Verify kinetic touch scrolling
+          grep -q "_is_dragging" source/tabs/game_library.py || { echo "ERROR: Kinetic touch code not found in game_library.py!"; exit 1; }
+          # Verify batch compress
+          grep -q "batch_compress_requested" source/tabs/game_library.py || { echo "ERROR: Batch compress not found in game_library.py!"; exit 1; }
+          # Verify build version stamp
+          grep -q "BUILD_VERSION" source/xzen_engine/constants.py || { echo "ERROR: BUILD_VERSION not found in constants.py!"; exit 1; }
+          echo "=== All source verifications passed ==="
+
       - name: Build Single Windows Executable with PyInstaller
         run: |
-          pyinstaller "Xzen Game Manager.spec" --clean
+          pyinstaller "Xzen Game Manager.spec" --clean --noconfirm
 
       - name: Verify Executable Exists
         shell: bash
@@ -54,10 +88,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v1.0.0-legion-go
-          name: "Xzen Game Compressor - Legion Go & Handheld Edition (v1.0.0)"
+          tag_name: v1.1.0-legion-go
+          name: "Xzen Game Manager - Legion Go & Handheld Edition (v1.1.0-LG)"
           body: |
-            ## Xzen Game Compressor - Handheld & Legion Go Edition
+            ## Xzen Game Manager - Handheld & Legion Go Edition (v1.1.0-LG)
 
             ### What's New:
             - **Touch-Swipe Kinetic Scrolling**: Multi-touch & drag vertical list navigation with inertia momentum.
@@ -66,6 +100,7 @@ jobs:
             - **Pre-Calculated Savings Preview**: Real-time storage savings preview estimation on every game entry.
             - **Pre-Compressed Media Exclusions**: Instant bypass of `.mp4`, `.mp3`, and compressed archive formats to save CPU cycles.
             - **Auto-Compress Background Monitor**: Background service to auto-schedule LZX compression when new game downloads complete and device is idle.
+            - **Build Version Stamp**: Window title now shows version for verification.
 
             Download `Xzen Game Manager.exe` below to run immediately on Windows!
           files: dist/Xzen Game Manager.exe
