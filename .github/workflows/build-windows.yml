@@ -88,10 +88,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v1.2.1-legion-go
-          name: "Xzen Game Manager - Legion Go & Handheld Edition (v1.2.1-LG)"
+          tag_name: v1.2.2-legion-go
+          name: "Xzen Game Manager - Legion Go & Handheld Edition (v1.2.2-LG)"
           body: |
-            ## Xzen Game Manager - Handheld & Legion Go Edition (v1.2.1-LG)
+            ## Xzen Game Manager - Handheld & Legion Go Edition (v1.2.2-LG)
 
             ### What's New:
             - **Touch-Swipe Kinetic Scrolling**: Multi-touch & drag vertical list navigation with inertia momentum.
